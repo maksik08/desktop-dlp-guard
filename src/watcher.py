@@ -5,33 +5,33 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from src.config import IGNORED_EXTENSIONS, IGNORED_PREFIXES, MAX_FILE_SIZE_BYTES
+from src.extractor import TextExtractor
 
 
 class AdvancedFileHandler(FileSystemEventHandler):
-    """Обработчик событий файловой системы с фильтрацией и проверками."""
+
 
     def _should_ignore(self, file_path: str) -> bool:
-        """Проверка, нужно ли проигнорировать данный файл."""
         filename = os.path.basename(file_path)
 
-        # 1. Проверка на системные/временные префиксы (~$doc.docx, .DS_Store)
+        #  Проверка на системные/временные префиксы
         if any(filename.startswith(prefix) for prefix in IGNORED_PREFIXES):
             return True
 
-        # 2. Проверка на временные расширения (.tmp, .crdownload)
+        #  Проверка на временные расширения
         ext = os.path.splitext(filename)[1].lower()
         if ext in IGNORED_EXTENSIONS:
             return True
 
-        # 3. Проверка существования файла на диске
+        #  Проверка существования файла на диске
         if not os.path.exists(file_path):
             return True
 
-        # 4. Проверка размера файла (пропускаем гигабайтные архивы/видео)
+        #  Проверка размера файла
         try:
             file_size = os.path.getsize(file_path)
             if file_size > MAX_FILE_SIZE_BYTES:
-                print(f"[⚠️ IGNORE] Файл слишком большой ({file_size / (1024*1024):.1f} МБ): {filename}")
+                print(f"[⚠️ IGNORE] Файл слишком большой ({file_size / (1024 * 1024):.1f} МБ): {filename}")
                 return True
         except OSError:
             return True
@@ -39,7 +39,6 @@ class AdvancedFileHandler(FileSystemEventHandler):
         return False
 
     def _process_file(self, event_type: str, file_path: str):
-        """Централизованная логика обработки подтвержденного файла."""
         if self._should_ignore(file_path):
             return
 
@@ -52,10 +51,18 @@ class AdvancedFileHandler(FileSystemEventHandler):
         print(f" ├─ Путь: {file_path}")
         print(f" └─ Размер: {file_size_kb:.2f} KB")
 
-        # Небольшая пауза, чтобы операционная система успела полностью дописать файл на диск
-        time.sleep(0.3)
+        print(f" [*] Запуск извлечения текста (Lab 2)...")
+        extracted_text = TextExtractor.extract_text(file_path)
 
-        # ЗДЕСЬ в Лабораторной №2 будет вызываться: extractor.extract_text(file_path)
+        if extracted_text:
+            preview = extracted_text.strip().replace('\n', ' ')
+            if len(preview) > 100:
+                preview = preview[:100] + "..."
+            print(f" [📄 EXTRACTED TEXT] -> \"{preview}\"")
+        else:
+            print(f" [ℹ️] Текст не найден или формат не поддерживается для чтения.")
+
+        time.sleep(0.3)
 
     def on_created(self, event):
         if not event.is_directory:
@@ -71,7 +78,7 @@ class AdvancedFileHandler(FileSystemEventHandler):
 
 
 class DLPWatcher:
-    """Класс управления экземплярами Observer для отслеживания нескольких директорий."""
+    "Класс управления экземплярами Observer для отслеживания директорий."
 
     def __init__(self, watch_paths: list):
         self.watch_paths = watch_paths
@@ -88,7 +95,7 @@ class DLPWatcher:
 
         self.observer.start()
         print("\n[*] Служба DLP Watcher успешно запущена.")
-        print("[*] Нажмите Ctrl+C для завершения работы.\n" + "-"*50)
+        print("[*] Нажмите Ctrl+C для завершения работы.\n" + "-" * 50)
 
         try:
             while True:
