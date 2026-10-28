@@ -6,28 +6,28 @@ from watchdog.observers import Observer
 
 from src.config import IGNORED_EXTENSIONS, IGNORED_PREFIXES, MAX_FILE_SIZE_BYTES
 from src.extractor import TextExtractor
+from src.logger import AuditLogger  # Импортируем наш новый логгер
 
 
 class AdvancedFileHandler(FileSystemEventHandler):
 
+    def __init__(self):
+        super().__init__()
+        self.audit_logger = AuditLogger()  # Инициализируем систему аудита
 
     def _should_ignore(self, file_path: str) -> bool:
         filename = os.path.basename(file_path)
 
-        #  Проверка на системные/временные префиксы
         if any(filename.startswith(prefix) for prefix in IGNORED_PREFIXES):
             return True
 
-        #  Проверка на временные расширения
         ext = os.path.splitext(filename)[1].lower()
         if ext in IGNORED_EXTENSIONS:
             return True
 
-        #  Проверка существования файла на диске
         if not os.path.exists(file_path):
             return True
 
-        #  Проверка размера файла
         try:
             file_size = os.path.getsize(file_path)
             if file_size > MAX_FILE_SIZE_BYTES:
@@ -44,23 +44,34 @@ class AdvancedFileHandler(FileSystemEventHandler):
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         filename = os.path.basename(file_path)
-        file_size_kb = os.path.getsize(file_path) / 1024
+        try:
+            file_size_kb = os.path.getsize(file_path) / 1024
+        except OSError:
+            file_size_kb = 0.0
 
         print(f"\n[🔔 EVENT | {timestamp}] [{event_type.upper()}]")
         print(f" ├─ Файл: {filename}")
         print(f" ├─ Путь: {file_path}")
         print(f" └─ Размер: {file_size_kb:.2f} KB")
 
+        # Извлекаем текст из файла
         print(f" [*] Запуск извлечения текста (Lab 2)...")
         extracted_text = TextExtractor.extract_text(file_path)
+
+        status = "SUCCESS" if extracted_text else "EMPTY_OR_UNSUPPORTED"
 
         if extracted_text:
             preview = extracted_text.strip().replace('\n', ' ')
             if len(preview) > 100:
                 preview = preview[:100] + "..."
             print(f" [📄 EXTRACTED TEXT] -> \"{preview}\"")
+            details = f"Extracted {len(extracted_text)} chars"
         else:
             print(f" [ℹ️] Текст не найден или формат не поддерживается для чтения.")
+            details = "No text extracted"
+
+        # Записываем событие в аудит-лог
+        self.audit_logger.log_event(event_type, file_path, file_size_kb, status, details)
 
         time.sleep(0.3)
 
@@ -78,7 +89,6 @@ class AdvancedFileHandler(FileSystemEventHandler):
 
 
 class DLPWatcher:
-    "Класс управления экземплярами Observer для отслеживания директорий."
 
     def __init__(self, watch_paths: list):
         self.watch_paths = watch_paths
