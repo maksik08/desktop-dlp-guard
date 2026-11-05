@@ -6,14 +6,16 @@ from watchdog.observers import Observer
 
 from src.config import IGNORED_EXTENSIONS, IGNORED_PREFIXES, MAX_FILE_SIZE_BYTES
 from src.extractor import TextExtractor
-from src.logger import AuditLogger  # Импортируем наш новый логгер
+from src.logger import AuditLogger
+from src.analyzer import DLPAnalyzer
 
 
 class AdvancedFileHandler(FileSystemEventHandler):
 
     def __init__(self):
         super().__init__()
-        self.audit_logger = AuditLogger()  # Инициализируем систему аудита
+        self.audit_logger = AuditLogger()
+        self.analyzer = DLPAnalyzer()
 
     def _should_ignore(self, file_path: str) -> bool:
         filename = os.path.basename(file_path)
@@ -54,24 +56,24 @@ class AdvancedFileHandler(FileSystemEventHandler):
         print(f" ├─ Путь: {file_path}")
         print(f" └─ Размер: {file_size_kb:.2f} KB")
 
-        # Извлекаем текст из файла
-        print(f" [*] Запуск извлечения текста (Lab 2)...")
+        print(f" [*] Извлечение текста...")
         extracted_text = TextExtractor.extract_text(file_path)
 
-        status = "SUCCESS" if extracted_text else "EMPTY_OR_UNSUPPORTED"
+        if not extracted_text:
+            print(f" [ℹ️] Текст не найден или файл пуст.")
+            self.audit_logger.log_event(event_type, file_path, file_size_kb, "EMPTY", "No text extracted")
+            return
 
-        if extracted_text:
-            preview = extracted_text.strip().replace('\n', ' ')
-            if len(preview) > 100:
-                preview = preview[:100] + "..."
-            print(f" [📄 EXTRACTED TEXT] -> \"{preview}\"")
-            details = f"Extracted {len(extracted_text)} chars"
-        else:
-            print(f" [ℹ️] Текст не найден или формат не поддерживается для чтения.")
-            details = "No text extracted"
+        print(f" [*] Запуск DLP-анализа (Regex + Ollama)...")
+        threat_level, regex_results, ai_verdict = self.analyzer.evaluate(extracted_text)
 
-        # Записываем событие в аудит-лог
-        self.audit_logger.log_event(event_type, file_path, file_size_kb, status, details)
+        print(f" [🛡️ DLP VERDICT] Угроза: {threat_level}")
+        if regex_results:
+            print(f"    └─ Regex совпадения: {list(regex_results.keys())}")
+        print(f"    └─ AI Анализ: {ai_verdict}")
+
+        details = f"Threat: {threat_level} | Regex: {list(regex_results.keys())} | AI: {ai_verdict}"
+        self.audit_logger.log_event(event_type, file_path, file_size_kb, f"THREAT_{threat_level}", details)
 
         time.sleep(0.3)
 
@@ -104,7 +106,7 @@ class DLPWatcher:
                 print(f"[!] Папка не найдена, пропускаем: {path}")
 
         self.observer.start()
-        print("\n[*] Служба DLP Watcher успешно запущена.")
+        print("\n[*] Служба DLP Watcher успешно запущена (Lab 3 Active).")
         print("[*] Нажмите Ctrl+C для завершения работы.\n" + "-" * 50)
 
         try:
