@@ -12,7 +12,11 @@ class AuditLogger:
 
     def _ensure_log_dir(self):
         if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+            try:
+                os.makedirs(self.log_dir)
+                print(f"[+] Создана папка для логов: {os.path.abspath(self.log_dir)}")
+            except Exception as e:
+                print(f"[!] Не удалось создать папку для логов: {e}")
 
     def log_event(self, event_type: str, file_path: str, file_size: float, status: str, details: str = ""):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -27,5 +31,6 @@ class AuditLogger:
         try:
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(log_entry)
+            print(f" [📝 AUDIT] Записано в лог: {self.log_path}")
         except Exception as e:
-            print(f"[!] Ошибка записи в лог: {e}")
+            print(f"[!] Ошибка записи в лог {self.log_path}: {e}")
