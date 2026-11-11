@@ -1,82 +1,76 @@
 import re
 import requests
-import json
 
 
 class DLPAnalyzer:
-    """Движок анализа рисков утечки данных (Regex + Ollama LLM)."""
 
-    def __init__(self, ollama_model="llama3"):
-        self.ollama_model = ollama_model
-        self.ollama_url = "http://localhost:11434/api/generate"
+    def __init__(self, model_name="llama3.2"):
+        self.model_name = model_name
+        self.url = "http://localhost:11434/api/generate"
 
-        # Шаблоны регулярных выражений для быстрого поиска (Regex Engine)
+        # Сигнатуры для быстрого regex-анализа (API-ключи, пароли, AWS ключи)
         self.patterns = {
-            "API_KEY": r"(?:api[_-]?key|secret[_-]?key|token)['\"\\s]*[:=]['\"\\s]*([a-zA-Z0-9_\-]{20,})",
-            "CREDIT_CARD": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
-            "EMAIL": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-            "IP_ADDRESS": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
-            "PASSWORD_HINT": r"(?:password|passwd|пароль)['\"\\s]*[:=]['\"\\s]*([^\s]{4,})"
+            "API_KEY": r"(?:api[_-]?key|access[_-]?token)['\"\\s]*[:=]['\"\\s]*([a-zA-Z0-9_\\-]{16,})",
+            "PASSWORD": r"(?:password|passwd|pwd)['\"\\s]*[:=]['\"\\s]*([^\s'\"]{6,})",
+            "AWS_KEY": r"AKIA[0-9A-Z]{16}"
         }
 
-    def analyze_regex(self, text: str) -> dict:
-        """Быстрый поиск конфиденциальных данных по регулярным выражениям."""
-        findings = {}
-        for category, pattern in self.patterns.items():
+    def _regex_check(self, text: str) -> dict:
+        found = {}
+        for name, pattern in self.patterns.items():
             matches = re.findall(pattern, text, re.IGNORECASE)
             if matches:
-                # Уникализируем найденные совпадения и скрываем часть для безопасности в логах
-                findings[category] = list(set(matches))
-        return findings
+                found[name] = matches
+        return found
 
-    def analyze_semantic(self, text: str) -> str:
-        """Глубокий семантический анализ текста с помощью локальной Ollama LLM."""
-        # Обрезаем текст до разумного лимита, чтобы не перегружать модель
-        truncated_text = text[:3000]
-
+    def _ai_check(self, text: str) -> str:
         prompt = (
-            "You are a strict Data Loss Prevention (DLP) security AI. "
-            "Analyze the following text snippet and determine if it contains sensitive corporate data, "
-            "source code secrets, financial reports, or personal data. "
-            "Respond ONLY with a short verdict: 'SAFE', 'SUSPICIOUS', or 'CRITICAL', "
-            "followed by a brief 1-sentence reason.\n\n"
-            f"Text: {truncated_text}"
+            "Analyze the following text for sensitive data (API keys, passwords, PII, confidential records). "
+            "Return threat level (LOW, HIGH, CRITICAL) and a brief reason:\n\n"
+            f"{text}"
         )
 
         payload = {
-            "model": self.ollama_model,
+            "model": self.model_name,
             "prompt": prompt,
-            "stream": False
+            "stream": False,
+            "options": {
+                "num_predict": 50,  # Жестко ограничиваем длину ответа для мгновенной работы
+                "temperature": 0.1  # Строгий и детерминированный ответ
+            }
         }
 
         try:
-            response = requests.post(self.ollama_url, json=payload, timeout=10)
+            # Запрос к локальному серверу Ollama с тайм-аутом 15 секунд
+            response = requests.post(self.url, json=payload, timeout=15)
             if response.status_code == 200:
-                result = response.json().get("response", "").strip()
-                return result
+                data = response.json()
+                return data.get("response", "").strip()
             else:
-                return "AI_ERROR: Ollama returned status code " + str(response.status_code)
+                return f"AI_ERROR: HTTP status {response.status_code}"
         except requests.exceptions.ConnectionError:
             return "AI_OFFLINE: Ollama service is not running locally."
+        except requests.exceptions.Timeout:
+            return "AI_ERROR: Read timed out."
         except Exception as e:
             return f"AI_ERROR: {str(e)}"
 
-    def evaluate(self, text: str) -> tuple:
-        """Комплексная оценка документа: Regex + Семантика."""
-        regex_results = self.analyze_regex(text)
-
-        # Если найдены критические regex-паттерны — сразу высокий риск
-        is_regex_critical = len(regex_results) > 0
-
-        # Запрашиваем вердикт у локальной LLM
-        ai_verdict = self.analyze_semantic(text)
+    def evaluate(self, text: str):
+        # 1. Первичная проверка регулярными выражениями
+        regex_results = self._regex_check(text)
 
         threat_level = "LOW"
-        if is_regex_critical:
+        if regex_results:
             threat_level = "HIGH"
-        if "CRITICAL" in ai_verdict.upper():
+
+        # 2. Семантический анализ через легкую локальную модель llama3.2
+        ai_verdict = self._ai_check(text)
+
+        # 3. Синтез общего вердикта угрозы
+        ai_upper = ai_verdict.upper()
+        if "CRITICAL" in ai_upper:
             threat_level = "CRITICAL"
-        elif "SUSPICIOUS" in ai_verdict.upper() and threat_level != "HIGH":
-            threat_level = "MEDIUM"
+        elif "HIGH" in ai_upper and threat_level != "CRITICAL":
+            threat_level = "HIGH"
 
         return threat_level, regex_results, ai_verdict

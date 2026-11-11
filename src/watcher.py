@@ -8,6 +8,7 @@ from src.config import IGNORED_EXTENSIONS, IGNORED_PREFIXES, MAX_FILE_SIZE_BYTES
 from src.extractor import TextExtractor
 from src.logger import AuditLogger
 from src.analyzer import DLPAnalyzer
+from src.quarantine import QuarantineManager
 
 
 class AdvancedFileHandler(FileSystemEventHandler):
@@ -16,6 +17,7 @@ class AdvancedFileHandler(FileSystemEventHandler):
         super().__init__()
         self.audit_logger = AuditLogger()
         self.analyzer = DLPAnalyzer()
+        self.quarantine_manager = QuarantineManager()
 
     def _should_ignore(self, file_path: str) -> bool:
         filename = os.path.basename(file_path)
@@ -72,7 +74,12 @@ class AdvancedFileHandler(FileSystemEventHandler):
             print(f"    └─ Regex совпадения: {list(regex_results.keys())}")
         print(f"    └─ AI Анализ: {ai_verdict}")
 
-        details = f"Threat: {threat_level} | Regex: {list(regex_results.keys())} | AI: {ai_verdict}"
+        # Проверка на карантин при критических угрозах
+        quarantine_path = ""
+        if threat_level in ["HIGH", "CRITICAL"]:
+            quarantine_path = self.quarantine_manager.isolate_file(file_path, threat_level)
+
+        details = f"Threat: {threat_level} | Regex: {list(regex_results.keys())} | AI: {ai_verdict} | Quarantined: {bool(quarantine_path)}"
         self.audit_logger.log_event(event_type, file_path, file_size_kb, f"THREAT_{threat_level}", details)
 
         time.sleep(0.3)
@@ -106,7 +113,7 @@ class DLPWatcher:
                 print(f"[!] Папка не найдена, пропускаем: {path}")
 
         self.observer.start()
-        print("\n[*] Служба DLP Watcher успешно запущена (Lab 3 Active).")
+        print("\n[*] Служба DLP Watcher успешно запущена (Lab 3 Enhanced Active).")
         print("[*] Нажмите Ctrl+C для завершения работы.\n" + "-" * 50)
 
         try:
