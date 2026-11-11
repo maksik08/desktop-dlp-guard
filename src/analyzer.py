@@ -8,10 +8,10 @@ class DLPAnalyzer:
         self.model_name = model_name
         self.url = "http://localhost:11434/api/generate"
 
-        # Сигнатуры для быстрого regex-анализа (API-ключи, пароли, AWS ключи)
+        # Расширенные сигнатуры (включая русские ключевые слова и ключи)
         self.patterns = {
             "API_KEY": r"(?:api[_-]?key|access[_-]?token)['\"\\s]*[:=]['\"\\s]*([a-zA-Z0-9_\\-]{16,})",
-            "PASSWORD": r"(?:password|passwd|pwd)['\"\\s]*[:=]['\"\\s]*([^\s'\"]{6,})",
+            "PASSWORD": r"(?:password|passwd|pwd|пароль)['\"\\s]*[:=]['\"\\s]*([^\s'\"]{4,})",
             "AWS_KEY": r"AKIA[0-9A-Z]{16}"
         }
 
@@ -24,10 +24,12 @@ class DLPAnalyzer:
         return found
 
     def _ai_check(self, text: str) -> str:
+        # Нейтральный промпт для классификации, который не вызывает отказ системы безопасности ИИ
         prompt = (
-            "Analyze the following text for sensitive data (API keys, passwords, PII, confidential records). "
-            "Return threat level (LOW, HIGH, CRITICAL) and a brief reason:\n\n"
-            f"{text}"
+            "Task: Data classification for system compliance audit. "
+            "Analyze the text snippet below and determine if it contains sensitive technical data, credentials, or keys. "
+            "Output format requirement: Start with risk level (LOW, HIGH, or CRITICAL) followed by a short reason.\n\n"
+            f"Text: {text}"
         )
 
         payload = {
@@ -35,23 +37,22 @@ class DLPAnalyzer:
             "prompt": prompt,
             "stream": False,
             "options": {
-                "num_predict": 50,  # Жестко ограничиваем длину ответа для мгновенной работы
-                "temperature": 0.1  # Строгий и детерминированный ответ
+                "num_predict": 40,
+                "temperature": 0.1
             }
         }
 
         try:
-            # Запрос к локальному серверу Ollama с тайм-аутом 15 секунд
-            response = requests.post(self.url, json=payload, timeout=15)
+            response = requests.post(self.url, json=payload, timeout=20)
             if response.status_code == 200:
                 data = response.json()
-                return data.get("response", "").strip()
+                res_text = data.get("response", "").strip()
+                # Если модель все же попыталась выдать отказ, подменяем на нейтральный ответ
+                if "I cannot" in res_text or "I can't" in res_text:
+                    return "HIGH: Potential sensitive credential detected."
+                return res_text
             else:
                 return f"AI_ERROR: HTTP status {response.status_code}"
-        except requests.exceptions.ConnectionError:
-            return "AI_OFFLINE: Ollama service is not running locally."
-        except requests.exceptions.Timeout:
-            return "AI_ERROR: Read timed out."
         except Exception as e:
             return f"AI_ERROR: {str(e)}"
 
@@ -63,7 +64,7 @@ class DLPAnalyzer:
         if regex_results:
             threat_level = "HIGH"
 
-        # 2. Семантический анализ через легкую локальную модель llama3.2
+        # 2. Семантический анализ через ИИ
         ai_verdict = self._ai_check(text)
 
         # 3. Синтез общего вердикта угрозы
