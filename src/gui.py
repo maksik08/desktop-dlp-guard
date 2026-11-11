@@ -2,6 +2,8 @@ import os
 import sys
 import threading
 import sqlite3
+import subprocess
+import requests
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 
@@ -22,8 +24,8 @@ class DLPApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("🛡️ Desktop Sentinel & DLP Guard")
-        self.geometry("950x650")
-        self.minsize(800, 500)
+        self.geometry("980x680")
+        self.minsize(850, 520)
 
         # Компоненты DLP
         self.extractor = TextExtractor()
@@ -44,19 +46,34 @@ class DLPApp(tk.Tk):
         self._create_widgets()
         self.refresh_logs()
 
+        # Проверяем статус Ollama при старте
+        self.check_ollama_status()
+
     def _create_widgets(self):
         # Панель управления
-        top_frame = ttk.LabelFrame(self, text=" Управление DLP-службой ")
+        top_frame = ttk.LabelFrame(self, text=" Управление системой и ИИ ")
         top_frame.pack(fill="x", padx=10, pady=5)
 
+        # Кнопка мониторинга
         self.btn_toggle = ttk.Button(top_frame, text="▶ Запустить мониторинг", command=self.toggle_monitoring)
-        self.btn_toggle.pack(side="left", padx=10, pady=10)
+        self.btn_toggle.pack(side="left", padx=8, pady=10)
 
-        self.lbl_status = ttk.Label(top_frame, text="Статус: ОСТАНОВЛЕН", font=("Segoe UI", 10, "bold"),
+        self.lbl_status = ttk.Label(top_frame, text="Статус: ОСТАНОВЛЕН", font=("Segoe UI", 9, "bold"),
                                     foreground="red")
-        self.lbl_status.pack(side="left", padx=10)
+        self.lbl_status.pack(side="left", padx=5)
 
-        lbl_folder = ttk.Label(top_frame, text=f"Папка: {self.watch_path}", font=("Consolas", 9))
+        # Разделитель
+        ttk.Separator(top_frame, orient="vertical").pack(side="left", fill="y", padx=10, pady=5)
+
+        # Кнопка управления Ollama
+        self.btn_ollama = ttk.Button(top_frame, text="🤖 Запустить Ollama", command=self.start_ollama_service)
+        self.btn_ollama.pack(side="left", padx=5)
+
+        self.lbl_ollama = ttk.Label(top_frame, text="ИИ: Проверка...", font=("Segoe UI", 9, "bold"),
+                                    foreground="orange")
+        self.lbl_ollama.pack(side="left", padx=5)
+
+        lbl_folder = ttk.Label(top_frame, text=f"Папка: test_folder", font=("Consolas", 9))
         lbl_folder.pack(side="right", padx=10)
 
         # Вкладки
@@ -103,6 +120,41 @@ class DLPApp(tk.Tk):
         self.log_area.insert(tk.END, message + "\n", tag)
         self.log_area.see(tk.END)
 
+    def check_ollama_status(self):
+        """Проверяет, запущен ли локальный сервер Ollama."""
+
+        def _ping():
+            try:
+                res = requests.get("http://localhost:11434/", timeout=2)
+                if res.status_code == 200:
+                    self.after(0, lambda: self.lbl_ollama.config(text="ИИ: АКТИВЕН", foreground="green"))
+                else:
+                    self.after(0, lambda: self.lbl_ollama.config(text="ИИ: ОТКЛЮЧЕН", foreground="red"))
+            except:
+                self.after(0, lambda: self.lbl_ollama.config(text="ИИ: ОТКЛЮЧЕН", foreground="red"))
+
+        threading.Thread(target=_ping, daemon=True).start()
+
+    def start_ollama_service(self):
+        """Запускает Ollama в фоновом режиме прямо из приложения."""
+
+        def _run():
+            try:
+                self.log_message("[SYSTEM] Запуск локального сервера Ollama...", "INFO")
+                # Флаг для Windows, чтобы не открывалось черное окно cmd
+                creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                subprocess.Popen(["ollama", "serve"], creationflags=creation_flags)
+
+                # Ждем 3 секунды пока сервер поднимется
+                import time
+                time.sleep(3)
+                self.check_ollama_status()
+                self.log_message("[SYSTEM] Сервер Ollama успешно инициирован.", "INFO")
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Ошибка", f"Не удалось запустить Ollama:\n{e}"))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def toggle_monitoring(self):
         if not self.is_running:
             self.start_monitoring()
@@ -146,6 +198,7 @@ class DLPApp(tk.Tk):
                 cursor.execute("SELECT id, timestamp, event_type, filename, status FROM audit_logs ORDER BY id DESC")
                 for row in cursor.fetchall():
                     self.tree.insert("", tk.END, values=row)
+            self.check_ollama_status()
         except Exception as e:
             messagebox.showerror("Ошибка БД", f"Не удалось прочитать базу данных: {e}")
 
@@ -167,7 +220,6 @@ class GUIWatchdogHandler(FileSystemEventHandler):
             self.process_event("MOVED/RENAMED", event.dest_path)
 
     def process_event(self, event_type: str, file_path: str):
-        # Запускаем в отдельном потоке, чтобы GUI не зависал во время запроса к Ollama
         threading.Thread(target=self._analyze_file, args=(event_type, file_path), daemon=True).start()
 
     def _analyze_file(self, event_type: str, file_path: str):
@@ -201,7 +253,7 @@ class GUIWatchdogHandler(FileSystemEventHandler):
         self.app.logger.log_event(event_type, file_path, threat_level, ai_verdict)
 
         # 5. Обновление таблицы в GUI
-        self.app.refresh_logs()
+        self.app.after(0, self.app.refresh_logs)
 
 
 if __name__ == "__main__":
