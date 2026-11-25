@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import threading
 import sqlite3
 import subprocess
@@ -68,7 +69,7 @@ class DLPApp(tk.Tk):
                                     foreground="orange")
         self.lbl_ollama.pack(side="left", padx=5)
 
-        lbl_folder = ttk.Label(top_frame, text=f"Папка: test_folder", font=("Consolas", 9))
+        lbl_folder = ttk.Label(top_frame, text="Папка: test_folder", font=("Consolas", 9))
         lbl_folder.pack(side="right", padx=10)
 
         notebook = ttk.Notebook(self)
@@ -114,7 +115,6 @@ class DLPApp(tk.Tk):
 
     def check_ollama_status(self):
         """Проверяет, запущен ли локальный сервер Ollama."""
-
         def _ping():
             try:
                 res = requests.get("http://localhost:11434/", timeout=2)
@@ -122,21 +122,19 @@ class DLPApp(tk.Tk):
                     self.after(0, lambda: self.lbl_ollama.config(text="ИИ: АКТИВЕН", foreground="green"))
                 else:
                     self.after(0, lambda: self.lbl_ollama.config(text="ИИ: ОТКЛЮЧЕН", foreground="red"))
-            except:
+            except Exception:
                 self.after(0, lambda: self.lbl_ollama.config(text="ИИ: ОТКЛЮЧЕН", foreground="red"))
 
         threading.Thread(target=_ping, daemon=True).start()
 
     def start_ollama_service(self):
         """Запускает Ollama в фоновом режиме прямо из приложения."""
-
         def _run():
             try:
                 self.log_message("[SYSTEM] Запуск локального сервера Ollama...", "INFO")
                 creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 subprocess.Popen(["ollama", "serve"], creationflags=creation_flags)
 
-                import time
                 time.sleep(3)
                 self.check_ollama_status()
                 self.log_message("[SYSTEM] Сервер Ollama успешно инициирован.", "INFO")
@@ -176,6 +174,7 @@ class DLPApp(tk.Tk):
         self.log_message("[SYSTEM] Мониторинг остановлен.", "INFO")
 
     def refresh_logs(self):
+        """Очищает и заново загружает данные из базы SQLite в таблицу."""
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -213,6 +212,7 @@ class DLPApp(tk.Tk):
 class GUIWatchdogHandler(FileSystemEventHandler):
     def __init__(self, app: DLPApp):
         self.app = app
+        self._last_processed = {}
 
     def on_created(self, event):
         if not event.is_directory:
@@ -227,9 +227,19 @@ class GUIWatchdogHandler(FileSystemEventHandler):
             self.process_event("MOVED/RENAMED", event.dest_path)
 
     def process_event(self, event_type: str, file_path: str):
+        now = time.time()
+        last_time = self._last_processed.get(file_path, 0)
+        if now - last_time < 1.5:
+            return
+        self._last_processed[file_path] = now
+
         threading.Thread(target=self._analyze_file, args=(event_type, file_path), daemon=True).start()
 
     def _analyze_file(self, event_type: str, file_path: str):
+        time.sleep(0.3)
+        if not os.path.exists(file_path):
+            return
+
         filename = os.path.basename(file_path)
         self.app.log_message(f"\n[🔔 EVENT | {event_type}] Файл: {filename}", "INFO")
 
@@ -249,14 +259,19 @@ class GUIWatchdogHandler(FileSystemEventHandler):
             self.app.log_message(f"   └─ Regex совпадения: {regex_hits}", "HIGH")
         self.app.log_message(f"   └─ AI Анализ: {ai_verdict[:90]}...", tag)
 
+        audit_details = ai_verdict
+
         if threat_level in ["HIGH", "CRITICAL"]:
-            isolated_path = self.app.quarantine.isolate(file_path, threat_level)
-            self.app.log_message(f" [🚨 QUARANTINE] Файл изолирован: {isolated_path}", "CRITICAL")
+            enc_path = self.app.quarantine.isolate(file_path, threat_level)
+            shredded = not os.path.exists(file_path)
+            shred_status = "SHREDDED" if shredded else "SHRED_FAILED_OR_LOCKED"
 
-        self.app.logger.log_event(event_type, file_path, threat_level, ai_verdict)
+            self.app.log_message(f" [🔐 AES-256] Зашифровано в карантин: {enc_path}", "CRITICAL")
+            self.app.log_message(f" [🔥 SHRED] Статус уничтожения оригинала: {shred_status}", "CRITICAL")
+            audit_details = f"{ai_verdict} | AES-256: {enc_path} | Orig: {shred_status}"
 
-
-        self.app.after(0, self.app.refresh_logs)
+        self.app.logger.log_event(event_type, file_path, threat_level, audit_details)
+        self.app.after(100, self.app.refresh_logs)
 
 
 if __name__ == "__main__":

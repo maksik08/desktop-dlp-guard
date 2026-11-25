@@ -39,9 +39,16 @@ class AuditLogger:
         except Exception as e:
             print(f"[!] Ошибка инициализации БД: {e}")
 
-    def log_event(self, event_type: str, file_path: str, file_size: float, status: str, details: str = ""):
+    def log_event(self, event_type: str, file_path: str, status: str, details: str = "", file_size: float = 0.0):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         filename = os.path.basename(file_path)
+
+        # Автоматически определяем размер файла, если он существует
+        if file_size == 0.0 and os.path.exists(file_path):
+            try:
+                file_size = os.path.getsize(file_path)
+            except Exception:
+                file_size = 0.0
 
         try:
             with sqlite3.connect(self.db_path) as conn:
